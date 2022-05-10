@@ -217,3 +217,91 @@ def OptimalPortfolioSim(t, num_portfolios=500, rfr=0.0135):
     min_vol_allocation = min_vol_allocation.T
 
     return max_sharpe_allocation, MSR_metrics, min_vol_allocation, MV_metrics
+
+
+# Forward Selection Function
+def forwardSelection(table, threshold=None, min_assets=1, max_rounds=500):
+    # Simulate Portfolios, Give each Asset a chance at being "Seed"
+    for unique_token in table.columns:
+        asset_selection_table = table.copy(deep=True) #recopy per token
+        # init vars
+        converged = False
+        n_updates = 0
+        subset_assets = False
+        steps_since_update = 0
+        global_opt_changes = 0 
+        MSR_best = {"std_dev":1e7, "adj_return":0} #init params for asset selection, easy to beat
+        MSR_global = {"std_dev":500, "adj_return":1} #init same for meta-portfolio comparision (will try manually setting lower std dev)
+
+        current_assets = [unique_token] #starting asset
+        n_rounds = 0 #keep track of steps
+        converged = False
+        
+        while not converged:
+            n_rounds += 1
+            # Subset data for Asset -- if past first asset will add 1 additional
+            if subset_assets == True:
+                dfa = asset_selection_table.sample(n=min_assets, axis=1)
+                for asset in current_assets:
+                    dfa[asset] = table[asset] #re-add the assets we excluded from the table, these are constants now
+            else:
+                dfa = asset_selection_table.drop(columns=unique_token) #instantiate table from global 
+                dfa = dfa.sample(n=min_assets, axis=1) #sample without current column
+                dfa[unique_token] = asset_selection_table[unique_token] #add unique token in 
+
+            # Simulate Portfolios
+            MSR_allocation, MSR_metrics, MSR_allocation, MV_metrics = OptimalPortfolioSim(t=dfa, num_portfolios=50, rfr=0.0135)
+
+            # Evaluate & Potentially Change Best Portfolio
+            if (MSR_metrics["adj_return"] >= MSR_best["adj_return"]) and (MSR_metrics["std_dev"] <= MSR_best["std_dev"]):
+                MSR_best["adj_return"] = MSR_metrics["adj_return"]
+                MSR_best["std_dev"] = MSR_metrics["std_dev"]
+                MSR_best_allocation = MSR_allocation
+                n_updates += 1
+                steps_since_update = 0 #reset if more optimization is likely
+
+            # Add additional asset to Set if no changes in portfolio optimization
+            if steps_since_update == threshold:
+                current_assets = MSR_best_allocation.columns
+                assets_to_drop = set(current_assets).intersection(asset_selection_table.columns) #get assets in both that need to be discarded
+                asset_selection_table = asset_selection_table.drop(columns=assets_to_drop)
+                subset_assets = True #using filtered df, holding some assets constant 
+                steps_since_update = 0 #reset update counter
+
+            # Add Step -- at each timestep, for adding additional assets to portfolio
+            steps_since_update += 1
+            
+            # Termination Criteria 
+            if n_rounds == max_rounds:
+                # Summary print info on termination
+                print(n_updates, f"for - {unique_token}")
+                print(f"# of Assets in Portfolio- {len(MSR_best_allocation.columns)}") #start w "n_assets" and append if threshold is exceeded (no new optimums)
+                print(f"Asset Tickers- {MSR_best_allocation.columns}")
+                converged = True
+                
+            elif steps_since_update == 300: #also terminate if not updating
+                # Summary print info on termination
+                print(n_updates, f"for - {unique_token}")
+                print(f"# of Assets in Portfolio- {len(MSR_best_allocation.columns)}")
+                print(f"Asset Tickers- {MSR_best_allocation.columns}")
+                converged = True
+
+            
+        if (MSR_best["adj_return"] >= MSR_global["adj_return"]) and (MSR_best["std_dev"] <= MSR_global["std_dev"]):
+        #if MSR_best["adj_return"]-MSR_best["std_dev"] > 0 :  #only if `guaranteed` to be greater than zero gains
+            MSR_global["adj_return"] = MSR_best["adj_return"]
+            MSR_global["std_dev"] = MSR_best["std_dev"]
+            MSR_global_allocation = MSR_best_allocation
+            global_opt_changes += 1
+
+            # Print out Optimum's Changes Summary
+            print(f"Change # {global_opt_changes} to Global Optima")
+            print("Assets-", [i for i in MSR_global_allocation.columns])
+            print("Alloca-", MSR_global_allocation.values)
+            print("Return-", MSR_global["adj_return"])
+            print("stddev-", MSR_global["std_dev"])
+            print("\n\n")
+    
+    # Print out Best Portfolio & Return Allocations
+    print("Global Portfolio Params:\n", MSR_global)
+    return MSR_global, MSR_global_allocation
